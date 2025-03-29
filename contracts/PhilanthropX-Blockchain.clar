@@ -553,5 +553,59 @@
   )
 )
 
+;; Emergency API: Request asset recovery
+(define-public (request-asset-recovery (allocation-id uint) (justification (string-ascii 100)))
+  (begin
+    (asserts! (is-valid-allocation-id allocation-id) ERROR_INVALID_ALLOCATION_ID)
+    (let
+      (
+        (allocation (unwrap! (map-get? ResourceAllocations { allocation-id: allocation-id }) ERROR_RESOURCE_NOT_FOUND))
+        (provider (get provider allocation))
+        (quantity (get quantity allocation))
+        (validated-count (get validated-achievements allocation))
+        (remaining-quantity (- quantity (* (/ quantity (len (get achievements allocation))) validated-count)))
+        (recovery-request (default-to 
+                            { overseer-approved: false, provider-approved: false, justification: justification }
+                            (map-get? RecoveryRequests { allocation-id: allocation-id })))
+      )
+      (asserts! (or (is-eq tx-sender OVERSEER) (is-eq tx-sender provider)) ERROR_ACCESS_DENIED)
+      (asserts! (not (is-eq (get state allocation) "returned")) ERROR_ASSETS_ALREADY_DISBURSED)
+      (asserts! (not (is-eq (get state allocation) "recovered")) ERROR_ASSETS_ALREADY_DISBURSED)
+
+      ;; Set approvals based on who called the function
+      (if (is-eq tx-sender OVERSEER)
+        (map-set RecoveryRequests
+          { allocation-id: allocation-id }
+          (merge recovery-request { overseer-approved: true, justification: justification })
+        )
+        (map-set RecoveryRequests
+          { allocation-id: allocation-id }
+          (merge recovery-request { provider-approved: true, justification: justification })
+        )
+      )
+
+      ;; Check if both have approved
+      (let
+        (
+          (updated-request (unwrap! (map-get? RecoveryRequests { allocation-id: allocation-id }) ERROR_RESOURCE_NOT_FOUND))
+        )
+        (if (and (get overseer-approved updated-request) (get provider-approved updated-request))
+          (match (stx-transfer? remaining-quantity (as-contract tx-sender) provider)
+            success
+              (begin
+                (map-set ResourceAllocations
+                  { allocation-id: allocation-id }
+                  (merge allocation { state: "recovered" })
+                )
+                (ok true)
+              )
+            error ERROR_ASSET_TRANSFER_FAILED
+          )
+          (ok false)
+        )
+      )
+    )
+  )
+)
 
 
