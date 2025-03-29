@@ -368,3 +368,62 @@
   )
 )
 
+;; Enhanced API: Augment allocation quantity
+(define-public (augment-allocation-quantity (allocation-id uint) (additional-quantity uint))
+  (begin
+    (asserts! (is-valid-allocation-id allocation-id) ERROR_INVALID_ALLOCATION_ID)
+    (asserts! (> additional-quantity u0) ERROR_INVALID_ASSET_QUANTITY)
+    (let
+      (
+        (allocation (unwrap! (map-get? ResourceAllocations { allocation-id: allocation-id }) ERROR_RESOURCE_NOT_FOUND))
+        (provider (get provider allocation))
+        (current-quantity (get quantity allocation))
+      )
+      (asserts! (is-eq tx-sender provider) ERROR_ACCESS_DENIED)
+      (asserts! (< block-height (get expires-at allocation)) ERROR_ALLOCATION_LAPSED)
+      (match (stx-transfer? additional-quantity tx-sender (as-contract tx-sender))
+        success
+          (begin
+            (map-set ResourceAllocations
+              { allocation-id: allocation-id }
+              (merge allocation { quantity: (+ current-quantity additional-quantity) })
+            )
+            (ok true)
+          )
+        error ERROR_ASSET_TRANSFER_FAILED
+      )
+    )
+  )
+)
+
+;; Beneficiary API: Report achievement progress
+(define-public (record-achievement-progress 
+                (allocation-id uint) 
+                (achievement-index uint) 
+                (completion-percentage uint) 
+                (description (string-ascii 200))
+                (verification-hash (buff 32)))
+  (begin
+    (asserts! (is-valid-allocation-id allocation-id) ERROR_INVALID_ALLOCATION_ID)
+    (asserts! (<= completion-percentage u100) ERROR_INVALID_ASSET_QUANTITY)
+    (let
+      (
+        (allocation (unwrap! (map-get? ResourceAllocations { allocation-id: allocation-id }) ERROR_RESOURCE_NOT_FOUND))
+        (achievements (get achievements allocation))
+        (beneficiary (get beneficiary allocation))
+      )
+      (asserts! (is-eq tx-sender beneficiary) ERROR_ACCESS_DENIED)
+      (asserts! (< achievement-index (len achievements)) ERROR_INVALID_ACHIEVEMENT)
+      (asserts! (not (is-eq (get state allocation) "returned")) ERROR_ASSETS_ALREADY_DISBURSED)
+      (asserts! (< block-height (get expires-at allocation)) ERROR_ALLOCATION_LAPSED)
+
+      ;; Check if progress was already reported at 100%
+      (match (map-get? AchievementProgress { allocation-id: allocation-id, achievement-index: achievement-index })
+        prev-progress (asserts! (< (get completion-percentage prev-progress) u100) ERROR_ENHANCEMENT_ALREADY_RECORDED)
+        true
+      )
+      (ok true)
+    )
+  )
+)
+
