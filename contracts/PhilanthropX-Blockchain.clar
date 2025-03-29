@@ -293,3 +293,78 @@
   )
 )
 
+;; Advanced API: Create multi-beneficiary allocation with percentage-based distribution
+(define-public (create-proportional-allocation (recipients (list 5 { beneficiary: principal, percentage: uint })) (quantity uint))
+  (begin
+    (asserts! (> quantity u0) ERROR_INVALID_ASSET_QUANTITY)
+    (asserts! (> (len recipients) u0) ERROR_INVALID_ALLOCATION_ID)
+    (asserts! (<= (len recipients) MAX_BENEFICIARIES) ERROR_BENEFICIARY_LIMIT_EXCEEDED)
+
+    ;; Verify that percentages total 100%
+    (let
+      (
+        (total-percentage (fold + (map extract-percentage recipients) u0))
+      )
+      (asserts! (is-eq total-percentage u100) ERROR_INVALID_ASSET_DISTRIBUTION)
+
+      ;; Process the allocation
+      (match (stx-transfer? quantity tx-sender (as-contract tx-sender))
+        success
+          (let
+            (
+              (allocation-id (+ (var-get latest-multi-allocation-id) u1))
+            )
+            (map-set MultiRecipientAllocations
+              { multi-allocation-id: allocation-id }
+              {
+                provider: tx-sender,
+                recipients: recipients,
+                total-quantity: quantity,
+                initialized-at: block-height,
+                state: "active"
+              }
+            )
+            (var-set latest-multi-allocation-id allocation-id)
+            (ok allocation-id)
+          )
+        error ERROR_ASSET_TRANSFER_FAILED
+      )
+    )
+  )
+)
+
+;; Admin API: Set system operational state
+(define-public (set-system-operational-state (new-state bool))
+  (begin
+    (asserts! (is-eq tx-sender OVERSEER) ERROR_ACCESS_DENIED)
+    (ok new-state)
+  )
+)
+
+;; Core API: Check if beneficiary is verified
+(define-read-only (is-beneficiary-verified (beneficiary principal))
+  (default-to false (get verified (map-get? VerifiedBeneficiaries { beneficiary: beneficiary })))
+)
+
+;; Enhanced API: Extend allocation timeframe
+(define-public (extend-allocation-timeframe (allocation-id uint) (extension-time uint))
+  (begin
+    (asserts! (is-valid-allocation-id allocation-id) ERROR_INVALID_ALLOCATION_ID)
+    (asserts! (<= extension-time MAX_EXTENSION_TIME) ERROR_INVALID_ASSET_QUANTITY)
+    (let
+      (
+        (allocation (unwrap! (map-get? ResourceAllocations { allocation-id: allocation-id }) ERROR_RESOURCE_NOT_FOUND))
+        (provider (get provider allocation))
+        (current-expiry (get expires-at allocation))
+      )
+      (asserts! (is-eq tx-sender provider) ERROR_ACCESS_DENIED)
+      (asserts! (< block-height current-expiry) ERROR_ALREADY_LAPSED)
+      (map-set ResourceAllocations
+        { allocation-id: allocation-id }
+        (merge allocation { expires-at: (+ current-expiry extension-time) })
+      )
+      (ok true)
+    )
+  )
+)
+
