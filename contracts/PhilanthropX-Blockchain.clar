@@ -427,3 +427,68 @@
   )
 )
 
+;; Enhanced API: High-security allocation initiation
+(define-public (secure-allocation-initiation (beneficiary principal) (quantity uint) (achievements (list 5 uint)))
+  (begin
+    (asserts! (not (var-get system-paused)) ERROR_ACCESS_DENIED)
+    (asserts! (is-beneficiary-verified beneficiary) ERROR_ACCESS_DENIED)
+    (asserts! (> quantity u0) ERROR_INVALID_ASSET_QUANTITY)
+    (asserts! (is-valid-beneficiary beneficiary) ERROR_INVALID_ACHIEVEMENT)
+    (asserts! (> (len achievements) u0) ERROR_INVALID_ACHIEVEMENT)
+
+    (let
+      (
+        (allocation-id (+ (var-get latest-allocation-id) u1))
+        (expiration-time (+ block-height ALLOCATION_LIFESPAN))
+      )
+      (match (stx-transfer? quantity tx-sender (as-contract tx-sender))
+        success
+          (begin
+            (map-set ResourceAllocations
+              { allocation-id: allocation-id }
+              {
+                provider: tx-sender,
+                beneficiary: beneficiary,
+                quantity: quantity,
+                state: "active",
+                initialized-at: block-height,
+                expires-at: expiration-time,
+                achievements: achievements,
+                validated-achievements: u0
+              }
+            )
+            (var-set latest-allocation-id allocation-id)
+            (ok allocation-id)
+          )
+        error ERROR_ASSET_TRANSFER_FAILED
+      )
+    )
+  )
+)
+
+;; Security API: Flag anomalous allocation
+(define-public (flag-anomalous-allocation (allocation-id uint) (indicator (string-ascii 20)))
+  (begin
+    (asserts! (is-valid-allocation-id allocation-id) ERROR_INVALID_ALLOCATION_ID)
+
+    ;; Only overseer or the beneficiary can flag allocations as anomalous
+    (let
+      (
+        (allocation (unwrap! (map-get? ResourceAllocations { allocation-id: allocation-id }) ERROR_RESOURCE_NOT_FOUND))
+        (beneficiary (get beneficiary allocation))
+      )
+      (asserts! (or (is-eq tx-sender OVERSEER) (is-eq tx-sender beneficiary)) ERROR_ACCESS_DENIED)
+
+      ;; Pause the specific allocation by updating its state
+      (map-set ResourceAllocations
+        { allocation-id: allocation-id }
+        (merge allocation { state: "flagged" })
+      )
+
+      (ok true)
+    )
+  )
+)
+
+
+
