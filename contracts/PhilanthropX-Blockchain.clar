@@ -608,4 +608,76 @@
   )
 )
 
+;; Enhanced API: Delegate allocation control
+(define-public (delegate-allocation-control 
+                (allocation-id uint) 
+                (proxy principal) 
+                (can-terminate bool)
+                (can-prolong bool)
+                (can-augment bool)
+                (delegation-duration uint))
+  (begin
+    (asserts! (is-valid-allocation-id allocation-id) ERROR_INVALID_ALLOCATION_ID)
+    (asserts! (> delegation-duration u0) ERROR_INVALID_ASSET_QUANTITY)
+    (let
+      (
+        (allocation (unwrap! (map-get? ResourceAllocations { allocation-id: allocation-id }) ERROR_RESOURCE_NOT_FOUND))
+        (provider (get provider allocation))
+        (proxy-access-expiry (+ block-height delegation-duration))
+      )
+      (asserts! (is-eq tx-sender provider) ERROR_ACCESS_DENIED)
+      (asserts! (< block-height (get expires-at allocation)) ERROR_ALLOCATION_LAPSED)
+      (asserts! (not (is-eq (get state allocation) "returned")) ERROR_ASSETS_ALREADY_DISBURSED)
 
+      ;; Check if delegation already exists
+      (match (map-get? AllocationDelegates { allocation-id: allocation-id })
+        existing-delegation (asserts! (< block-height (get proxy-access-expiry existing-delegation)) ERROR_DELEGATION_EXISTS)
+        true
+      )
+
+      (ok true)
+    )
+  )
+)
+
+;; Admin API: Batch validate multiple achievements
+(define-public (batch-validate-achievements (allocation-ids (list 10 uint)))
+  (begin
+    (asserts! (is-eq tx-sender OVERSEER) ERROR_ACCESS_DENIED)
+    (let
+      (
+        (result (fold validate-achievement-batch allocation-ids (ok true)))
+      )
+      result
+    )
+  )
+)
+
+;; Enhanced API: Velocity-limited allocation with abuse prevention
+(define-public (velocity-limited-allocation (beneficiary principal) (quantity uint) (achievements (list 5 uint)))
+  (let
+    (
+      (provider-activity (default-to 
+                        { last-allocation-block: u0, allocations-in-window: u0 }
+                        (map-get? ProviderActivityMonitor { provider: tx-sender })))
+      (last-block (get last-allocation-block provider-activity))
+      (window-count (get allocations-in-window provider-activity))
+      (is-new-window (> (- block-height last-block) VELOCITY_WINDOW))
+      (updated-count (if is-new-window u1 (+ window-count u1)))
+    )
+    ;; Velocity limit check
+    (asserts! (or is-new-window (< window-count MAX_ALLOCATIONS_PER_WINDOW)) ERROR_VELOCITY_LIMIT_EXCEEDED)
+
+    ;; Update the velocity monitoring system
+    (map-set ProviderActivityMonitor
+      { provider: tx-sender }
+      {
+        last-allocation-block: block-height,
+        allocations-in-window: updated-count
+      }
+    )
+
+    ;; Proceed with allocation
+    (secure-allocation-initiation beneficiary quantity achievements)
+  )
+)
