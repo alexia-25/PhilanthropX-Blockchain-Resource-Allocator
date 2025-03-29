@@ -490,5 +490,68 @@
   )
 )
 
+;; Community API: Submit allocation review
+(define-public (submit-allocation-review 
+                (allocation-id uint)
+                (rationale (string-ascii 200)))
+  (begin
+    (asserts! (is-valid-allocation-id allocation-id) ERROR_INVALID_ALLOCATION_ID)
+    (let
+      (
+        (allocation (unwrap! (map-get? ResourceAllocations { allocation-id: allocation-id }) ERROR_RESOURCE_NOT_FOUND))
+      )
+      ;; Prevent multiple reviews
+      (match (map-get? AllocationReviews { allocation-id: allocation-id })
+        existing-review (asserts! false ERROR_REVIEW_EXISTS)
+        true
+      )
+
+      ;; Transfer review stake
+      (match (stx-transfer? REVIEW_STAKE tx-sender (as-contract tx-sender))
+        success
+          (begin
+            (ok true)
+          )
+        error ERROR_ASSET_TRANSFER_FAILED
+      )
+    )
+  )
+)
+
+;; Admin API: Resolve allocation review
+(define-public (resolve-allocation-review (allocation-id uint) (is-valid bool))
+  (begin
+    (asserts! (is-eq tx-sender OVERSEER) ERROR_ACCESS_DENIED)
+    (let
+      (
+        (review (unwrap! 
+          (map-get? AllocationReviews { allocation-id: allocation-id }) 
+          ERROR_RESOURCE_NOT_FOUND))
+        (submission-block (get submission-block review))
+      )
+      (asserts! (not (get concluded review)) ERROR_ACCESS_DENIED)
+      (asserts! (< (- block-height submission-block) REVIEW_TIMEFRAME) ERROR_REVIEW_PERIOD_ENDED)
+
+      ;; Return or reallocate stake based on review validity
+      (if is-valid
+        ;; Review is valid, return stake to reviewer and penalize allocation
+        (begin
+          (match (stx-transfer? (get review-stake review) (as-contract tx-sender) (get reviewer review))
+            success (ok true)
+            error ERROR_ASSET_TRANSFER_FAILED
+          )
+        )
+        ;; Review is invalid, reallocate stake to overseer
+        (begin
+          (match (stx-transfer? (get review-stake review) (as-contract tx-sender) OVERSEER)
+            success (ok true)
+            error ERROR_ASSET_TRANSFER_FAILED
+          )
+        )
+      )
+    )
+  )
+)
+
 
 
