@@ -236,5 +236,60 @@
   )
 )
 
+;; Core API: Return assets to provider if allocation expires without validation
+(define-public (return-assets (allocation-id uint))
+  (begin
+    (asserts! (is-valid-allocation-id allocation-id) ERROR_INVALID_ALLOCATION_ID)
+    (let
+      (
+        (allocation (unwrap! (map-get? ResourceAllocations { allocation-id: allocation-id }) ERROR_RESOURCE_NOT_FOUND))
+        (provider (get provider allocation))
+        (quantity (get quantity allocation))
+      )
+      (asserts! (is-eq tx-sender OVERSEER) ERROR_ACCESS_DENIED)
+      (asserts! (> block-height (get expires-at allocation)) ERROR_ALLOCATION_LAPSED)
+      (match (stx-transfer? quantity (as-contract tx-sender) provider)
+        success
+          (begin
+            (map-set ResourceAllocations
+              { allocation-id: allocation-id }
+              (merge allocation { state: "returned" })
+            )
+            (ok true)
+          )
+        error ERROR_ASSET_TRANSFER_FAILED
+      )
+    )
+  )
+)
 
+;; Core API: Terminate allocation - only provider can terminate before expiration
+(define-public (terminate-allocation (allocation-id uint))
+  (begin
+    (asserts! (is-valid-allocation-id allocation-id) ERROR_INVALID_ALLOCATION_ID)
+    (let
+      (
+        (allocation (unwrap! (map-get? ResourceAllocations { allocation-id: allocation-id }) ERROR_RESOURCE_NOT_FOUND))
+        (provider (get provider allocation))
+        (quantity (get quantity allocation))
+        (validated-count (get validated-achievements allocation))
+        (remaining-quantity (- quantity (* (/ quantity (len (get achievements allocation))) validated-count)))
+      )
+      (asserts! (is-eq tx-sender provider) ERROR_ACCESS_DENIED)
+      (asserts! (< block-height (get expires-at allocation)) ERROR_ALLOCATION_LAPSED)
+      (asserts! (is-eq (get state allocation) "active") ERROR_ASSETS_ALREADY_DISBURSED)
+      (match (stx-transfer? remaining-quantity (as-contract tx-sender) provider)
+        success
+          (begin
+            (map-set ResourceAllocations
+              { allocation-id: allocation-id }
+              (merge allocation { state: "terminated" })
+            )
+            (ok true)
+          )
+        error ERROR_ASSET_TRANSFER_FAILED
+      )
+    )
+  )
+)
 
